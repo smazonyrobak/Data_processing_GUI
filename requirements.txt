@@ -1,0 +1,12 @@
+PySide6
+numpy
+polars
+scipy
+torch
+kilosort
+argschema
+pandas
+GitPython
+xmljson
+xarray
+h5py
