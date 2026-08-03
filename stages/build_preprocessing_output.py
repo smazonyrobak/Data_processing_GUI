@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import json
 from pathlib import Path
 
 import numpy as np
@@ -32,6 +33,26 @@ def write_numeric_npz(path: Path, arrays: dict[str, np.ndarray]) -> None:
 
 def first_existing(paths: list[Path]) -> Path | None:
     return next((path for path in paths if path.exists()), None)
+
+
+def copy_randomization_provenance(cfg: PipelineConfig, out_dir: Path, copied: list[dict[str, str]]) -> None:
+    stimulus_dir = out_dir / "stimulus"
+    snapshot = cfg.stim_cam_path / "session_snapshot.json"
+    if snapshot.exists():
+        copy_file(snapshot, stimulus_dir / "session_snapshot.json", copied)
+        return
+
+    legacy_root = Path(__file__).resolve().parents[2] / "Experiment_running_GUI"
+    metadata = legacy_root / "last_run_recording_metadata.json"
+    if not metadata.exists():
+        return
+    payload = json.loads(metadata.read_text(encoding="utf-8"))
+    recorded_session = Path(str(payload.get("session_dir", "")))
+    if str(recorded_session).casefold() != str(cfg.stim_cam_path).casefold():
+        return
+    copy_file(metadata, stimulus_dir / "legacy_recording_metadata.json", copied)
+    settings = Path(str(payload.get("settings_file", "")))
+    copy_file(settings, stimulus_dir / "legacy_gui_settings.json", copied)
 
 
 def read_event_times(path: Path) -> np.ndarray:
@@ -257,12 +278,14 @@ def build_preprocessing_output(cfg: PipelineConfig, logger: StageLogger) -> None
     logger.log(f"Building preprocessing output: {out_dir}")
     crop_bounds = sync_crop_bounds_for_packaged_outputs(cfg, logger)
     sequence_paths = [
+        catgt_root / "tprime" / "stimulus_trials.csv",
         cfg.stim_cam_path / "stimulus_trials.csv",
         cfg.stim_cam_path / "somatosensory_stimulation" / "run_001_sequence.csv",
     ]
     sequence_path = next((path for path in sequence_paths if path.exists()), None)
     if sequence_path is not None:
         copy_file(sequence_path, out_dir / "stimulus" / "stimulus_trials.csv", copied)
+    copy_randomization_provenance(cfg, out_dir, copied)
     for sidecar_name in [
         "completed_moves_repaired.csv",
         "excluded_moves_repaired.csv",
@@ -272,7 +295,12 @@ def build_preprocessing_output(cfg: PipelineConfig, logger: StageLogger) -> None
 
     for src in sorted((catgt_root / "tprime").glob("*.txt")):
         copy_event_file(src, out_dir / "events" / src.name, copied, crop_bounds)
-    for name in ["stimulus_metadata_table.csv", "stimulus_metadata_table.parquet"]:
+    for name in [
+        "stimulus_metadata_table.csv",
+        "stimulus_metadata_table.parquet",
+        "stimulus_event_table.csv",
+        "stimulus_event_table.parquet",
+    ]:
         copy_stimulus_metadata(catgt_root / "tprime" / name, out_dir / "stimulus" / name, copied, crop_bounds)
 
     for probe_id in probe_ids:
@@ -292,6 +320,8 @@ def build_preprocessing_output(cfg: PipelineConfig, logger: StageLogger) -> None
         spike_seconds = load_aligned_spike_seconds(ks_dir)
         spike_clusters = np.load(ks_dir / "spike_clusters.npy", allow_pickle=False)
         channel_positions = np.load(ks_dir / "channel_positions.npy", allow_pickle=False)
+        channel_map_path = ks_dir / "channel_map.npy"
+        channel_map = np.load(channel_map_path, allow_pickle=False) if channel_map_path.exists() else np.arange(channel_positions.shape[0])
         unit_templates = load_unit_templates_uV(ks_dir, int(channel_positions.shape[0]))
         quality = read_quality_metrics(ks_dir, probe_id)
 
@@ -304,6 +334,7 @@ def build_preprocessing_output(cfg: PipelineConfig, logger: StageLogger) -> None
                 {
                     "probe": int(probe_id),
                     "channel_index": int(channel_index),
+                    "ks_channel_id": int(channel_map[channel_index]) if channel_index < len(channel_map) else int(channel_index),
                     "x_um": float(position[0]),
                     "y_um": float(position[1]),
                 }
