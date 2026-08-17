@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import re
 import subprocess
 import sys
 import traceback
@@ -27,8 +28,10 @@ from repair_tools import (
 
 
 STAGES = [
+    ("catgt", "CatGT only"),
     ("ecephys_pipeline", "ecephys_spike_sorting_LNE pipeline"),
-    ("custom_ks4", "Custom somatic KS4"),
+    ("custom_ks4", "Kilosort4S residual states"),
+    ("state_sorter", "StateSorter waveform states"),
     ("stimulus_metadata", "Stimulus metadata"),
     ("preprocessing_output", "Build preprocessing output"),
 ]
@@ -226,6 +229,7 @@ def add_path_row(form: QtWidgets.QFormLayout, label: str, text: str, browse_titl
 
 def int_spin(value: int, minimum: int = 0, maximum: int = 999999) -> QtWidgets.QSpinBox:
     widget = QtWidgets.QSpinBox()
+    widget.setKeyboardTracking(False)
     widget.setRange(minimum, maximum)
     widget.setValue(int(value))
     return widget
@@ -233,6 +237,7 @@ def int_spin(value: int, minimum: int = 0, maximum: int = 999999) -> QtWidgets.Q
 
 def float_spin(value: float, minimum: float = 0.0, maximum: float = 999999.0, decimals: int = 4) -> QtWidgets.QDoubleSpinBox:
     widget = QtWidgets.QDoubleSpinBox()
+    widget.setKeyboardTracking(False)
     widget.setRange(minimum, maximum)
     widget.setDecimals(decimals)
     widget.setValue(float(value))
@@ -342,6 +347,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker: PipelineWorker | None = None
         self.default_cfg = PipelineConfig()
         self.stage_checks: dict[str, QtWidgets.QCheckBox] = {}
+        self.advanced_sections: list[QtWidgets.QWidget] = []
         self.repair_plan: RepairPlan | None = None
 
         root = QtWidgets.QWidget()
@@ -368,6 +374,7 @@ class MainWindow(QtWidgets.QMainWindow):
         controls_layout = QtWidgets.QVBoxLayout(controls_body)
         main_splitter.addWidget(self.controls)
 
+        self.build_visibility_controls(controls_layout)
         self.build_path_controls(controls_layout)
         self.build_stage_controls(controls_layout)
         self.build_parameter_controls(controls_layout)
@@ -716,10 +723,43 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stim_cam_run.setText(output_text)
         self.status.setText("Repair output selected as stim/cam run")
 
-    def build_path_controls(self, parent: QtWidgets.QVBoxLayout) -> None:
-        group = QtWidgets.QGroupBox("Paths")
+    def build_visibility_controls(self, parent: QtWidgets.QVBoxLayout) -> None:
+        group = QtWidgets.QGroupBox("Settings visibility")
         layout = QtWidgets.QVBoxLayout(group)
         parent.addWidget(group)
+        self.show_advanced_settings = QtWidgets.QCheckBox("Show advanced / rarely changed settings")
+        self.show_advanced_settings.setChecked(False)
+        self.show_advanced_settings.toggled.connect(self.toggle_advanced_sections)
+        layout.addWidget(self.show_advanced_settings)
+
+    def register_advanced_section(self, widget: QtWidgets.QWidget) -> None:
+        self.advanced_sections.append(widget)
+        widget.setVisible(self.show_advanced_settings.isChecked())
+
+    def toggle_advanced_sections(self, visible: bool) -> None:
+        for section in self.advanced_sections:
+            section.setVisible(visible)
+
+    def build_path_controls(self, parent: QtWidgets.QVBoxLayout) -> None:
+        group = QtWidgets.QGroupBox("Run inputs and output")
+        form = QtWidgets.QFormLayout(group)
+        parent.addWidget(group)
+        cfg = self.default_cfg
+        self.spikeglx_run, _ = add_path_row(form, "SpikeGLX run", cfg.spikeglx_run, "Select SpikeGLX run folder")
+        self.stim_cam_run, _ = add_path_row(form, "Stim/cam run", cfg.stim_cam_run, "Select stim/cam run folder")
+        self.preprocessed_root, _ = add_path_row(form, "Output folder", cfg.preprocessed_root, "Select processing output folder")
+        self.preprocessed_root.setPlaceholderText("Required: dedicated output parent, outside both input folders")
+
+        notice = QtWidgets.QLabel(
+            "Data inputs are only SpikeGLX run and stim/cam run. CatGT, Kilosort, JSON, logs, and final data are written only inside the selected output folder."
+        )
+        notice.setWordWrap(True)
+        form.addRow("Output policy", notice)
+
+        advanced_group = QtWidgets.QGroupBox("Advanced system paths and repositories")
+        layout = QtWidgets.QVBoxLayout(advanced_group)
+        parent.addWidget(advanced_group)
+        self.register_advanced_section(advanced_group)
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         layout.addWidget(splitter)
@@ -733,15 +773,10 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter.addWidget(right)
         splitter.setSizes([520, 520])
 
-        cfg = self.default_cfg
         bundled_ecephys = APP_DIR / "ecephys_spike_sorting_LNE" / "ecephys_spike_sorting"
-        bundled_custom_ks4 = APP_DIR / "Kilosort_state_enhanced"
+        bundled_custom_ks4 = APP_DIR.parent / "Kilosort4S"
+        bundled_state_sorter = APP_DIR.parent / "StateSorter"
         self.processing_python, _ = add_path_row(left_form, "Processing Python", cfg.processing_python, "Select processing python.exe", file_mode=True)
-        self.spikeglx_run, _ = add_path_row(left_form, "SpikeGLX run (read-only)", cfg.spikeglx_run, "Select SpikeGLX run folder")
-        self.stim_cam_run, _ = add_path_row(left_form, "Stim/cam run", cfg.stim_cam_run, "Select stim/cam run folder")
-        self.preprocessed_root, _ = add_path_row(left_form, "Output folder", cfg.preprocessed_root, "Select processing output folder")
-        self.preprocessed_root.setPlaceholderText("Required: dedicated output parent, outside both input folders")
-
         self.catgt_exe, _ = add_path_row(right_form, "CatGT", cfg.catgt_exe, "Select CatGT.exe or CatGT folder", file_mode=True)
         self.tprime_exe, _ = add_path_row(right_form, "TPrime", cfg.tprime_exe, "Select TPrime runit.bat, TPrime.exe, or folder", file_mode=True)
         self.cwaves_path, _ = add_path_row(right_form, "C_Waves", cfg.cwaves_path, "Select C_Waves runit.bat or folder", file_mode=False)
@@ -758,16 +793,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.kilosort30_repository, _ = add_path_row(right_form, "KS3.0 repo", cfg.kilosort30_repository, "Select KS3.0 repository")
         self.custom_kilosort_repository, _ = add_path_row(
             right_form,
-            "Custom KS4 repo",
+            "Kilosort4S repo",
             cfg.custom_kilosort_repository or str(bundled_custom_ks4),
-            "Select custom KS4 repository",
+            "Select Kilosort4S repository",
         )
-
-        notice = QtWidgets.QLabel(
-            "Data inputs are only SpikeGLX run and stim/cam run. CatGT, Kilosort, JSON, logs, and final data are written only inside the selected output folder."
+        self.state_sorter_repository, _ = add_path_row(
+            right_form,
+            "StateSorter repo",
+            cfg.state_sorter_repository or str(bundled_state_sorter),
+            "Select StateSorter repository",
         )
-        notice.setWordWrap(True)
-        layout.addWidget(notice)
 
     def build_stage_controls(self, parent: QtWidgets.QVBoxLayout) -> None:
         group = QtWidgets.QGroupBox("Stages")
@@ -775,7 +810,7 @@ class MainWindow(QtWidgets.QMainWindow):
         parent.addWidget(group)
         for key, label in STAGES:
             check = QtWidgets.QCheckBox(label)
-            check.setChecked(True)
+            check.setChecked(key != "state_sorter")
             self.stage_checks[key] = check
             layout.addWidget(check)
 
@@ -796,12 +831,12 @@ class MainWindow(QtWidgets.QMainWindow):
         columns.setSizes([520, 520])
 
         self.build_run_spec_controls(left, cfg)
+        self.build_stimulus_output_controls(left, cfg)
         self.build_timing_controls(left, cfg)
         self.build_ecephys_controls(left, cfg)
-        self.build_stimulus_output_controls(left, cfg)
 
-        self.build_catgt_controls(right, cfg)
         self.build_kilosort_controls(right, cfg)
+        self.build_catgt_controls(right, cfg)
         self.build_region_controls(right, cfg)
         left.addStretch(1)
         right.addStretch(1)
@@ -831,13 +866,78 @@ class MainWindow(QtWidgets.QMainWindow):
         self.probe_rows_layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.probe_rows_widget)
         self.probe_id_spins: list[QtWidgets.QSpinBox] = []
+        self.probe_serial_boxes: list[QtWidgets.QComboBox] = []
         self.probe_region_boxes: list[QtWidgets.QComboBox] = []
         self.update_probe_rows(cfg.probe_ids, cfg.brain_regions)
+        self.spikeglx_run.textChanged.connect(self.refresh_probe_rows_from_run)
+
+    def detected_probe_streams(self) -> list[tuple[int, str]]:
+        run_folder = Path(self.spikeglx_run.text().strip())
+        if not run_folder.is_dir():
+            return []
+        streams: dict[int, str] = {}
+        for meta_path in run_folder.rglob("*.ap.meta"):
+            match = re.search(r"\.imec(\d+)\.ap\.meta$", meta_path.name)
+            if match is None:
+                continue
+            probe_id = int(match.group(1))
+            serial = ""
+            with meta_path.open(encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    if line.startswith("imDatPrb_sn="):
+                        serial = line.split("=", 1)[1].strip()
+                        break
+            if serial:
+                previous = streams.get(probe_id)
+                if previous is not None and previous != serial:
+                    raise ValueError(f"imec{probe_id} has conflicting probe serials: {previous} and {serial}")
+                streams[probe_id] = serial
+        return sorted(streams.items())
+
+    def refresh_probe_rows_from_run(self) -> None:
+        streams = self.detected_probe_streams()
+        if streams and self.n_probes.value() != len(streams):
+            self.n_probes.blockSignals(True)
+            self.n_probes.setValue(len(streams))
+            self.n_probes.blockSignals(False)
+            self.update_probe_rows([probe_id for probe_id, _serial in streams])
+            return
+        self.refresh_probe_serial_options()
+
+    def refresh_probe_serial_options(self, preferred_ids: list[int] | None = None) -> None:
+        streams = self.detected_probe_streams()
+        preferred_ids = list(preferred_ids or [])
+        for row, (serial_box, probe_spin) in enumerate(zip(self.probe_serial_boxes, self.probe_id_spins)):
+            current_id = serial_box.currentData()
+            preferred_id = preferred_ids[row] if row < len(preferred_ids) else current_id
+            serial_box.blockSignals(True)
+            serial_box.clear()
+            if streams:
+                for probe_id, serial in streams:
+                    serial_box.addItem(f"{serial} (imec{probe_id})", probe_id)
+                index = serial_box.findData(preferred_id)
+                serial_box.setCurrentIndex(index if index >= 0 else min(row, len(streams) - 1))
+            else:
+                serial_box.addItem("No .ap.meta probes found", None)
+            serial_box.blockSignals(False)
+            probe_id = serial_box.currentData()
+            probe_spin.setValue(int(probe_id) if probe_id is not None else 0)
+
+    @staticmethod
+    def set_probe_id_from_serial(serial_box: QtWidgets.QComboBox, probe_spin: QtWidgets.QSpinBox) -> None:
+        probe_id = serial_box.currentData()
+        probe_spin.setValue(int(probe_id) if probe_id is not None else 0)
 
     def update_probe_rows(self, probe_ids: list[int] | None = None, regions: list[str] | None = None) -> None:
         if not hasattr(self, "probe_rows_layout"):
             return
-        current_ids = [widget.value() for widget in getattr(self, "probe_id_spins", [])]
+        current_ids = [
+            int(box.currentData()) if box.currentData() is not None else spin.value()
+            for box, spin in zip(
+                getattr(self, "probe_serial_boxes", []),
+                getattr(self, "probe_id_spins", []),
+            )
+        ]
         current_regions = [widget.currentText() for widget in getattr(self, "probe_region_boxes", [])]
         probe_ids = list(probe_ids) if probe_ids is not None else current_ids
         regions = list(regions) if regions is not None else current_regions
@@ -849,28 +949,42 @@ class MainWindow(QtWidgets.QMainWindow):
                 widget.deleteLater()
 
         self.probe_id_spins = []
+        self.probe_serial_boxes = []
         self.probe_region_boxes = []
-        self.probe_rows_layout.addWidget(QtWidgets.QLabel("Probe"), 0, 0)
-        self.probe_rows_layout.addWidget(QtWidgets.QLabel("Probe ID"), 0, 1)
-        self.probe_rows_layout.addWidget(QtWidgets.QLabel("Brain region"), 0, 2)
+        self.probe_rows_layout.addWidget(QtWidgets.QLabel("Electrode"), 0, 0)
+        self.probe_rows_layout.addWidget(QtWidgets.QLabel("Physical probe serial"), 0, 1)
+        self.probe_rows_layout.addWidget(QtWidgets.QLabel("Probe ID"), 0, 2)
+        self.probe_rows_layout.addWidget(QtWidgets.QLabel("Brain region"), 0, 3)
         for row in range(self.n_probes.value()):
             probe_id = probe_ids[row] if row < len(probe_ids) else row
             region = regions[row] if row < len(regions) else (regions[0] if regions else "cortex")
+            serial_box = QtWidgets.QComboBox()
             probe_spin = int_spin(int(probe_id), 0, 999)
+            probe_spin.setReadOnly(True)
+            probe_spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+            probe_spin.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
             region_box = combo_box(["cortex", "thalamus", "medulla", "default"], "cortex")
             region_box.setEditable(True)
             set_combo_value(region_box, str(region))
             self.probe_rows_layout.addWidget(QtWidgets.QLabel(str(row + 1)), row + 1, 0)
-            self.probe_rows_layout.addWidget(probe_spin, row + 1, 1)
-            self.probe_rows_layout.addWidget(region_box, row + 1, 2)
+            self.probe_rows_layout.addWidget(serial_box, row + 1, 1)
+            self.probe_rows_layout.addWidget(probe_spin, row + 1, 2)
+            self.probe_rows_layout.addWidget(region_box, row + 1, 3)
+            serial_box.currentIndexChanged.connect(
+                lambda _index, box=serial_box, spin=probe_spin: self.set_probe_id_from_serial(box, spin)
+            )
+            self.probe_serial_boxes.append(serial_box)
             self.probe_id_spins.append(probe_spin)
             self.probe_region_boxes.append(region_box)
-        self.probe_rows_layout.setColumnStretch(2, 1)
+        self.probe_rows_layout.setColumnStretch(1, 1)
+        self.probe_rows_layout.setColumnStretch(3, 1)
+        self.refresh_probe_serial_options(probe_ids)
 
     def build_timing_controls(self, parent: QtWidgets.QVBoxLayout, cfg: PipelineConfig) -> None:
         group = QtWidgets.QGroupBox("Synchronization")
         form = QtWidgets.QFormLayout(group)
         parent.addWidget(group)
+        self.register_advanced_section(group)
         self.ni_word = int_spin(cfg.ni_word)
         self.sync_bit = int_spin(cfg.sync_bit, 0, 31)
         self.sync_threshold = int_spin(cfg.sync_threshold)
@@ -901,6 +1015,7 @@ class MainWindow(QtWidgets.QMainWindow):
         group = QtWidgets.QGroupBox("Package pipeline")
         form = QtWidgets.QFormLayout(group)
         parent.addWidget(group)
+        self.register_advanced_section(group)
         self.log_name = QtWidgets.QLineEdit(cfg.log_name)
         self.run_catgt = check_box(cfg.run_catgt)
         self.run_tprime = check_box(cfg.run_tprime)
@@ -925,6 +1040,7 @@ class MainWindow(QtWidgets.QMainWindow):
         group = QtWidgets.QGroupBox("CatGT command builder")
         layout = QtWidgets.QVBoxLayout(group)
         parent.addWidget(group)
+        self.register_advanced_section(group)
 
         form = QtWidgets.QFormLayout()
         layout.addLayout(form)
@@ -1021,9 +1137,15 @@ class MainWindow(QtWidgets.QMainWindow):
             }
 
     def build_kilosort_controls(self, parent: QtWidgets.QVBoxLayout, cfg: PipelineConfig) -> None:
-        group = QtWidgets.QGroupBox("Kilosort and C_Waves")
-        form = QtWidgets.QFormLayout(group)
-        parent.addWidget(group)
+        crop_group = QtWidgets.QGroupBox("Sorting crop")
+        crop_form = QtWidgets.QFormLayout(crop_group)
+        parent.addWidget(crop_group)
+
+        advanced_group = QtWidgets.QGroupBox("Advanced Kilosort and C_Waves")
+        form = QtWidgets.QFormLayout(advanced_group)
+        parent.addWidget(advanced_group)
+        self.register_advanced_section(advanced_group)
+
         self.probe_geometry_mode = combo_box(["metadata", "single_shank", "custom_json"], cfg.probe_geometry_mode)
         self.custom_probe_geometry, _ = add_path_row(form, "Custom probe JSON", cfg.custom_probe_geometry, "Select Kilosort probe JSON", file_mode=True)
         self.ks_remDup = int_spin(cfg.ks_remDup, 0, 1)
@@ -1049,19 +1171,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.noise_template_use_rf = check_box(cfg.noise_template_use_rf)
         self.custom_ks4_reference_duration_s = float_spin(cfg.custom_ks4_reference_duration_s, 0.0, 999999.0, 3)
         self.custom_ks4_run_quality_metrics = check_box(cfg.custom_ks4_run_quality_metrics)
-        self.custom_ks4_run_quality_metrics.setChecked(True)
-        self.custom_ks4_run_quality_metrics.setEnabled(False)
-        self.somatic_fragment_merge_max_depth_um = float_spin(cfg.somatic_fragment_merge_max_depth_um, 0.0, 10000.0, 3)
-        self.somatic_fragment_merge_same_shank_only = check_box(cfg.somatic_fragment_merge_same_shank_only)
-        self.somatic_fragment_merge_min_soma_similarity = float_spin(cfg.somatic_fragment_merge_min_soma_similarity, 0.0, 1.0, 4)
-        self.somatic_fragment_merge_max_isi_violation_fraction = float_spin(cfg.somatic_fragment_merge_max_isi_violation_fraction, 0.0, 1.0, 4)
-        self.somatic_fragment_merge_max_duplicate_fraction = float_spin(cfg.somatic_fragment_merge_max_duplicate_fraction, 0.0, 1.0, 4)
-        self.somatic_state_group_full_template_similarity = float_spin(cfg.somatic_state_group_full_template_similarity, 0.0, 1.0, 4)
-        self.somatic_refractory_ms = float_spin(cfg.somatic_refractory_ms, 0.0, 1000.0, 4)
-        self.somatic_duplicate_ms = float_spin(cfg.somatic_duplicate_ms, 0.0, 0.5, 4)
-        self.somatic_conflict_ratio_threshold = float_spin(cfg.somatic_conflict_ratio_threshold, 0.0, 1.0, 4)
-        self.somatic_max_spikes_per_unit_for_conflict_metrics = int_spin(cfg.somatic_max_spikes_per_unit_for_conflict_metrics, 1, 10000000)
-        self.somatic_state_channel_radius = int_spin(cfg.somatic_state_channel_radius, 0, 10000)
+        self.state_sorter_n_states = int_spin(cfg.state_sorter_n_states, 1, 1000000)
+        self.state_sorter_n_components = int_spin(cfg.state_sorter_n_components, 1, 1000000)
+        self.state_sorter_use_drift = check_box(cfg.state_sorter_use_drift)
+        for label, widget in [
+            ("Sort start s (ks_tmin)", self.ks_tmin),
+            ("Sort end s (ks_tmax, -1 = end)", self.ks_tmax),
+        ]:
+            crop_form.addRow(label, widget)
+
         for label, widget in [
             ("Geometry mode", self.probe_geometry_mode),
             ("ks remDup", self.ks_remDup),
@@ -1076,8 +1194,6 @@ class MainWindow(QtWidgets.QMainWindow):
             ("KS4 duplicate spike ms", self.ks4_duplicate_spike_ms),
             ("KS4 min template um", self.ks4_min_template_size_um),
             ("KS4 deterministic", self.ks4_det),
-            ("Sort start s (ks_tmin)", self.ks_tmin),
-            ("Sort end s (ks_tmax, -1 = end)", self.ks_tmax),
             ("KS CSB seed", self.ks_CSBseed),
             ("KS LT seed", self.ks_LTseed),
             ("KS helper noise threshold", self.ks_helper_noise_threshold),
@@ -1087,17 +1203,9 @@ class MainWindow(QtWidgets.QMainWindow):
             ("Noise RF classifier", self.noise_template_use_rf),
             ("Custom KS4 duration s", self.custom_ks4_reference_duration_s),
             ("Write unit QC outputs", self.custom_ks4_run_quality_metrics),
-            ("Somatic merge max depth um", self.somatic_fragment_merge_max_depth_um),
-            ("Somatic merge same shank", self.somatic_fragment_merge_same_shank_only),
-            ("Somatic min soma similarity", self.somatic_fragment_merge_min_soma_similarity),
-            ("Somatic max ISI fraction", self.somatic_fragment_merge_max_isi_violation_fraction),
-            ("Somatic max duplicate fraction", self.somatic_fragment_merge_max_duplicate_fraction),
-            ("Somatic state template similarity", self.somatic_state_group_full_template_similarity),
-            ("Somatic refractory ms", self.somatic_refractory_ms),
-            ("Somatic duplicate ms", self.somatic_duplicate_ms),
-            ("Somatic conflict ratio", self.somatic_conflict_ratio_threshold),
-            ("Somatic conflict sample cap", self.somatic_max_spikes_per_unit_for_conflict_metrics),
-            ("Somatic state channel radius", self.somatic_state_channel_radius),
+            ("StateSorter states", self.state_sorter_n_states),
+            ("StateSorter SVD components", self.state_sorter_n_components),
+            ("StateSorter drift correction", self.state_sorter_use_drift),
         ]:
             form.addRow(label, widget)
 
@@ -1105,6 +1213,7 @@ class MainWindow(QtWidgets.QMainWindow):
         group = QtWidgets.QGroupBox("Region parameter dictionaries")
         form = QtWidgets.QFormLayout(group)
         parent.addWidget(group)
+        self.register_advanced_section(group)
         self.ref_per_ms_by_region = dict_edit(cfg.ref_per_ms_by_region)
         self.ks_th2_by_region = dict_edit(cfg.ks_th2_by_region)
         self.ks_th3_by_region = dict_edit(cfg.ks_th3_by_region)
@@ -1118,15 +1227,11 @@ class MainWindow(QtWidgets.QMainWindow):
         group = QtWidgets.QGroupBox("Stimulus metadata and final output")
         form = QtWidgets.QFormLayout(group)
         parent.addWidget(group)
-        self.drop_first_switching = int_spin(cfg.drop_first_switching_intervals, 0, 1000)
-        self.drop_first_rotation = int_spin(cfg.drop_first_rotation_intervals, 0, 1000)
-        self.create_aux_timepoints = check_box(cfg.create_aux_timepoints)
-        self.event_ex_param_str = QtWidgets.QLineEdit(cfg.event_ex_param_str)
+        self.minimum_switching_pulse_ms = float_spin(cfg.minimum_switching_pulse_ms, 0.0, 10000.0, 1)
+        self.minimum_rotation_pulse_ms = float_spin(cfg.minimum_rotation_pulse_ms, 0.0, 10000.0, 1)
         for label, widget in [
-            ("Drop first switching intervals", self.drop_first_switching),
-            ("Drop first rotation intervals", self.drop_first_rotation),
-            ("Create aux timepoints", self.create_aux_timepoints),
-            ("PSTH event extract", self.event_ex_param_str),
+            ("Switching minimum pulse width (ms)", self.minimum_switching_pulse_ms),
+            ("Rotation minimum pulse width (ms)", self.minimum_rotation_pulse_ms),
         ]:
             form.addRow(label, widget)
 
@@ -1230,7 +1335,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.load_cfg_btn.clicked.connect(self.load_config_dialog)
 
     def parse_probe_ids(self) -> list[int]:
-        return [widget.value() for widget in self.probe_id_spins]
+        probe_ids = []
+        for serial_box in self.probe_serial_boxes:
+            probe_id = serial_box.currentData()
+            if probe_id is None:
+                raise ValueError("Select a SpikeGLX run containing readable .ap.meta probe files.")
+            probe_ids.append(int(probe_id))
+        if len(set(probe_ids)) != len(probe_ids):
+            raise ValueError("Select a different physical probe in each electrode row.")
+        return probe_ids
 
     def parse_brain_regions(self) -> list[str]:
         return [widget.currentText().strip() or "default" for widget in self.probe_region_boxes]
@@ -1256,19 +1369,12 @@ class MainWindow(QtWidgets.QMainWindow):
             kilosort25_repository=self.kilosort25_repository.text().strip(),
             kilosort30_repository=self.kilosort30_repository.text().strip(),
             custom_kilosort_repository=self.custom_kilosort_repository.text().strip(),
+            state_sorter_repository=self.state_sorter_repository.text().strip(),
             custom_ks4_reference_duration_s=self.custom_ks4_reference_duration_s.value(),
-            custom_ks4_run_quality_metrics=True,
-            somatic_fragment_merge_max_depth_um=self.somatic_fragment_merge_max_depth_um.value(),
-            somatic_fragment_merge_same_shank_only=self.somatic_fragment_merge_same_shank_only.isChecked(),
-            somatic_fragment_merge_min_soma_similarity=self.somatic_fragment_merge_min_soma_similarity.value(),
-            somatic_fragment_merge_max_isi_violation_fraction=self.somatic_fragment_merge_max_isi_violation_fraction.value(),
-            somatic_fragment_merge_max_duplicate_fraction=self.somatic_fragment_merge_max_duplicate_fraction.value(),
-            somatic_state_group_full_template_similarity=self.somatic_state_group_full_template_similarity.value(),
-            somatic_refractory_ms=self.somatic_refractory_ms.value(),
-            somatic_duplicate_ms=self.somatic_duplicate_ms.value(),
-            somatic_conflict_ratio_threshold=self.somatic_conflict_ratio_threshold.value(),
-            somatic_max_spikes_per_unit_for_conflict_metrics=self.somatic_max_spikes_per_unit_for_conflict_metrics.value(),
-            somatic_state_channel_radius=self.somatic_state_channel_radius.value(),
+            custom_ks4_run_quality_metrics=self.custom_ks4_run_quality_metrics.isChecked(),
+            state_sorter_n_states=self.state_sorter_n_states.value(),
+            state_sorter_n_components=self.state_sorter_n_components.value(),
+            state_sorter_use_drift=self.state_sorter_use_drift.isChecked(),
             gate_index=self.gate_index.value(),
             trial_start=self.trial_start.value(),
             trial_end=self.trial_end.value(),
@@ -1290,8 +1396,8 @@ class MainWindow(QtWidgets.QMainWindow):
             sync_crop_enabled=False,
             sync_crop_start_index=0,
             sync_crop_end_index=0,
-            drop_first_switching_intervals=self.drop_first_switching.value(),
-            drop_first_rotation_intervals=self.drop_first_rotation.value(),
+            minimum_switching_pulse_ms=self.minimum_switching_pulse_ms.value(),
+            minimum_rotation_pulse_ms=self.minimum_rotation_pulse_ms.value(),
             catgt_ap_filter=self.catgt_ap_filter.text().strip(),
             catgt_loccar_um=f"{self.loccar_min.value()},{self.loccar_max.value()}",
             catgt_gfix=self.catgt_gfix.text().strip(),
@@ -1306,8 +1412,6 @@ class MainWindow(QtWidgets.QMainWindow):
             process_lf=self.process_lf.isChecked(),
             catgt_cmd_string=catgt_cmd_string,
             ni_obx_extract_string=ni_obx_extract_string,
-            create_aux_timepoints=self.create_aux_timepoints.isChecked(),
-            event_ex_param_str=self.event_ex_param_str.text().strip(),
             probe_geometry_mode=self.probe_geometry_mode.currentText(),
             custom_probe_geometry=self.custom_probe_geometry.text().strip(),
             ks_ver=self.ks_ver.currentText(),
@@ -1353,7 +1457,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.kilosort20_repository.setText(cfg.kilosort20_repository)
         self.kilosort25_repository.setText(cfg.kilosort25_repository)
         self.kilosort30_repository.setText(cfg.kilosort30_repository)
-        self.custom_kilosort_repository.setText(cfg.custom_kilosort_repository or str(APP_DIR / "Kilosort_state_enhanced"))
+        self.custom_kilosort_repository.setText(
+            cfg.custom_kilosort_repository or str(APP_DIR.parent / "Kilosort4S")
+        )
+        self.state_sorter_repository.setText(
+            cfg.state_sorter_repository or str(APP_DIR.parent / "StateSorter")
+        )
         self.gate_index.setValue(cfg.gate_index)
         self.trial_start.setValue(cfg.trial_start)
         self.trial_end.setValue(cfg.trial_end)
@@ -1376,8 +1485,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sync_crop_enabled.setChecked(False)
         self.sync_crop_start_index.setValue(0)
         self.sync_crop_end_index.setValue(0)
-        self.drop_first_switching.setValue(cfg.drop_first_switching_intervals)
-        self.drop_first_rotation.setValue(cfg.drop_first_rotation_intervals)
+        self.minimum_switching_pulse_ms.setValue(cfg.minimum_switching_pulse_ms)
+        self.minimum_rotation_pulse_ms.setValue(cfg.minimum_rotation_pulse_ms)
         catgt_tokens = split_arg_string(cfg.catgt_cmd_string)
         self.catgt_prb_fld.setChecked("-prb_fld" in catgt_tokens)
         self.catgt_out_prb_fld.setChecked("-out_prb_fld" in catgt_tokens)
@@ -1406,8 +1515,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.extract_extra_args.setText(extract_string_extras(cfg.ni_obx_extract_string))
         self.extract_raw_override.setChecked(False)
         self.extract_raw_cmd.setPlainText(cfg.ni_obx_extract_string)
-        self.create_aux_timepoints.setChecked(cfg.create_aux_timepoints)
-        self.event_ex_param_str.setText(cfg.event_ex_param_str)
         set_combo_value(self.probe_geometry_mode, cfg.probe_geometry_mode)
         self.custom_probe_geometry.setText(cfg.custom_probe_geometry)
         set_combo_value(self.ks_ver, cfg.ks_ver)
@@ -1438,18 +1545,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.include_pc_metrics.setChecked(cfg.include_pc_metrics)
         self.noise_template_use_rf.setChecked(cfg.noise_template_use_rf)
         self.custom_ks4_reference_duration_s.setValue(cfg.custom_ks4_reference_duration_s)
-        self.custom_ks4_run_quality_metrics.setChecked(True)
-        self.somatic_fragment_merge_max_depth_um.setValue(cfg.somatic_fragment_merge_max_depth_um)
-        self.somatic_fragment_merge_same_shank_only.setChecked(cfg.somatic_fragment_merge_same_shank_only)
-        self.somatic_fragment_merge_min_soma_similarity.setValue(cfg.somatic_fragment_merge_min_soma_similarity)
-        self.somatic_fragment_merge_max_isi_violation_fraction.setValue(cfg.somatic_fragment_merge_max_isi_violation_fraction)
-        self.somatic_fragment_merge_max_duplicate_fraction.setValue(cfg.somatic_fragment_merge_max_duplicate_fraction)
-        self.somatic_state_group_full_template_similarity.setValue(cfg.somatic_state_group_full_template_similarity)
-        self.somatic_refractory_ms.setValue(cfg.somatic_refractory_ms)
-        self.somatic_duplicate_ms.setValue(cfg.somatic_duplicate_ms)
-        self.somatic_conflict_ratio_threshold.setValue(cfg.somatic_conflict_ratio_threshold)
-        self.somatic_max_spikes_per_unit_for_conflict_metrics.setValue(cfg.somatic_max_spikes_per_unit_for_conflict_metrics)
-        self.somatic_state_channel_radius.setValue(cfg.somatic_state_channel_radius)
+        self.custom_ks4_run_quality_metrics.setChecked(cfg.custom_ks4_run_quality_metrics)
+        self.state_sorter_n_states.setValue(cfg.state_sorter_n_states)
+        self.state_sorter_n_components.setValue(cfg.state_sorter_n_components)
+        self.state_sorter_use_drift.setChecked(cfg.state_sorter_use_drift)
         self.update_catgt_previews()
 
     def selected_stage_keys(self) -> list[str]:

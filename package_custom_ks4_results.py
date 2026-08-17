@@ -16,7 +16,7 @@ class PrintLogger:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Copy custom somatic KS4 outputs into preprocessed_data.")
+    parser = argparse.ArgumentParser(description="Copy modified KS4 state-compat outputs into preprocessed_data.")
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
 

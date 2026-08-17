@@ -83,12 +83,12 @@ SHELL_META_CHARS = {"&", "|", ">", "<", ";"}
 
 @dataclass
 class PipelineConfig:
-    processing_python: str = r"E:\SZYMON\Documents\Miniconda\envs\data_proc_gui\python.exe"
+    processing_python: str = r"C:\Users\slic\miniconda3\envs\npixel_analysis\python.exe"
     spikeglx_run: str = r"G:\SpikeGLX_data_saving_dir_Marcin_Szymon\SpikeGLX_savefiles\myRun_TEST_g0"
     stim_cam_run: str = r"G:\SpikeGLX_data_saving_dir_Marcin_Szymon\Stim_and_cam_savefiles\Run_TEST_stim_and_cam"
-    catgt_exe: str = r"E:\SZYMON\Documents\CatGT-win\CatGT.exe"
-    tprime_exe: str = r"E:\SZYMON\Documents\TPrime-win\TPrime.exe"
-    cwaves_path: str = r"E:\SZYMON\Documents\C_Waves-win"
+    catgt_exe: str = r"C:\Users\slic\Desktop\CatGT-win\CatGT.exe"
+    tprime_exe: str = r"C:\Users\slic\Desktop\TPrime-win\TPrime.exe"
+    cwaves_path: str = r"C:\Users\slic\Desktop\C_Waves-win"
     preprocessed_root: str = ""
     catgt_dest: str = ""
     json_directory: str = ""
@@ -100,19 +100,12 @@ class PipelineConfig:
     kilosort25_repository: str = ""
     kilosort30_repository: str = ""
     custom_kilosort_repository: str = ""
+    state_sorter_repository: str = ""
     custom_ks4_reference_duration_s: float = 0.0
     custom_ks4_run_quality_metrics: bool = True
-    somatic_fragment_merge_max_depth_um: float = 50.0
-    somatic_fragment_merge_same_shank_only: bool = True
-    somatic_fragment_merge_min_soma_similarity: float = 0.9
-    somatic_fragment_merge_max_isi_violation_fraction: float = 0.1
-    somatic_fragment_merge_max_duplicate_fraction: float = 0.1
-    somatic_state_group_full_template_similarity: float = 0.98
-    somatic_refractory_ms: float = 1.5
-    somatic_duplicate_ms: float = 0.25
-    somatic_conflict_ratio_threshold: float = 0.9
-    somatic_max_spikes_per_unit_for_conflict_metrics: int = 1000
-    somatic_state_channel_radius: int = 30
+    state_sorter_n_states: int = 200
+    state_sorter_n_components: int = 50
+    state_sorter_use_drift: bool = True
 
     gate_index: int = 0
     trial_start: int = 0
@@ -137,8 +130,8 @@ class PipelineConfig:
     sync_crop_start_index: int = 0
     sync_crop_end_index: int = 0
 
-    drop_first_switching_intervals: int = 2
-    drop_first_rotation_intervals: int = 0
+    minimum_switching_pulse_ms: float = 100.0
+    minimum_rotation_pulse_ms: float = 100.0
 
     catgt_ap_filter: str = "butter,12,300,9000"
     catgt_loccar_um: str = "40,140"
@@ -158,8 +151,6 @@ class PipelineConfig:
         "-xd=0,0,-1,2,0 -xid=0,0,-1,2,0 "
         "-xd=0,0,-1,3,0 -xid=0,0,-1,3,0"
     )
-    create_aux_timepoints: bool = False
-    event_ex_param_str: str = ""
     probe_geometry_mode: str = "metadata"
     custom_probe_geometry: str = ""
 
@@ -252,11 +243,20 @@ class PipelineConfig:
     def custom_kilosort_repo_dir(self) -> Path:
         if self.custom_kilosort_repository.strip():
             return Path(self.custom_kilosort_repository)
-        return Path(__file__).resolve().parent / "Kilosort_state_enhanced"
+        return Path(__file__).resolve().parent.parent / "Kilosort4S"
+
+    @property
+    def state_sorter_repo_dir(self) -> Path:
+        if self.state_sorter_repository.strip():
+            return Path(self.state_sorter_repository)
+        return Path(__file__).resolve().parent.parent / "StateSorter"
 
     def custom_ks4_probe_sort_dir(self, probe_id: int) -> Path:
         run, gate = self.run_and_gate
-        return self.catgt_root / f"{run}_g{gate}_imec{probe_id}" / f"imec{probe_id}_ks4_somatic"
+        return self.catgt_root / f"{run}_g{gate}_imec{probe_id}" / f"imec{probe_id}_ks4_state_compat"
+
+    def state_sorter_probe_output_dir(self, probe_id: int) -> Path:
+        return self.preprocessed_dir / "state_sorter" / f"imec{probe_id}"
 
     @property
     def output_root(self) -> Path:
@@ -298,17 +298,20 @@ class PipelineConfig:
 
     def _required_text_fields(self, selected_stage_keys: list[str] | None = None) -> dict[str, str]:
         selected = set(selected_stage_keys or [])
-        require_ecephys = not selected or "ecephys_pipeline" in selected
+        require_ecephys_pipeline = not selected or "ecephys_pipeline" in selected
+        require_catgt = require_ecephys_pipeline or "catgt" in selected
+        require_ecephys_package = require_ecephys_pipeline or require_catgt or "custom_ks4" in selected
         fields = {
             "processing_python": "Processing Python",
             "spikeglx_run": "SpikeGLX raw run",
             "stim_cam_run": "Stim/cam run",
             "preprocessed_root": "Analysis output root",
         }
-        if require_ecephys:
+        if require_ecephys_package:
             fields["ecephys_directory"] = "ecephys package"
-            if self.run_catgt:
-                fields["catgt_exe"] = "CatGT"
+        if require_catgt:
+            fields["catgt_exe"] = "CatGT"
+        if require_ecephys_pipeline:
             if self.run_tprime:
                 fields["tprime_exe"] = "TPrime"
             if "mean_waveforms" in self.modules:
@@ -316,6 +319,8 @@ class PipelineConfig:
             if str(self.ks_ver) in {"2.0", "2.5", "3.0"} or "kilosort_helper" in self.modules:
                 fields["npy_matlab_repository"] = "npy-matlab repo"
                 fields["kilosort_repository"] = "Kilosort repo"
+        if "custom_ks4" in selected and self.custom_ks4_run_quality_metrics:
+            fields["cwaves_path"] = "C_Waves"
         return fields
 
     def _validate_required_paths(self, selected_stage_keys: list[str] | None, errors: list[str]) -> None:
@@ -325,17 +330,20 @@ class PipelineConfig:
 
     def _validate_existing_paths(self, selected_stage_keys: list[str] | None, errors: list[str]) -> None:
         selected = set(selected_stage_keys or [])
-        require_ecephys = not selected or "ecephys_pipeline" in selected
+        require_ecephys_pipeline = not selected or "ecephys_pipeline" in selected
+        require_catgt = require_ecephys_pipeline or "catgt" in selected
+        require_ecephys_package = require_ecephys_pipeline or require_catgt or "custom_ks4" in selected
 
         path_specs: list[tuple[str, Path, bool | None]] = [
             ("Processing Python", Path(self.processing_python), False),
             ("SpikeGLX raw run", self.spikeglx_path, True),
             ("Stim/cam run", self.stim_cam_path, True),
         ]
-        if require_ecephys:
+        if require_ecephys_package:
             path_specs.append(("ecephys package", self.ecephys_package_dir, True))
-            if self.run_catgt:
-                path_specs.append(("CatGT", Path(self.catgt_exe), None))
+        if require_catgt:
+            path_specs.append(("CatGT", Path(self.catgt_exe), None))
+        if require_ecephys_pipeline:
             if self.run_tprime:
                 path_specs.append(("TPrime", Path(self.tprime_exe), None))
             if "mean_waveforms" in self.modules:
@@ -343,8 +351,14 @@ class PipelineConfig:
             if str(self.ks_ver) in {"2.0", "2.5", "3.0"} or "kilosort_helper" in self.modules:
                 path_specs.append(("npy-matlab repo", Path(self.npy_matlab_repository), True))
                 path_specs.append(("Kilosort repo", Path(self.kilosort_repository), True))
+        if "custom_ks4" in selected and self.custom_ks4_run_quality_metrics:
+            path_specs.append(("C_Waves", Path(self.cwaves_path), None))
         if "custom_ks4" in selected:
-            path_specs.append(("Custom KS4 repo", self.custom_kilosort_repo_dir, True))
+            path_specs.append(("Kilosort4S/custom KS4 repo", self.custom_kilosort_repo_dir, True))
+        if "state_sorter" in selected:
+            path_specs.append(("StateSorter repo", self.state_sorter_repo_dir, True))
+            if self.probe_geometry_mode == "custom_json":
+                path_specs.append(("Custom probe JSON", Path(self.custom_probe_geometry), False))
 
         for label, path, directory in path_specs:
             _require_absolute(label, path, errors)
@@ -464,27 +478,16 @@ class PipelineConfig:
         if "custom_ks4" not in selected:
             return
         if float(self.custom_ks4_reference_duration_s) < 0:
-            errors.append("Custom KS4 reference duration must be >= 0 seconds. Use 0 to reuse the full regular KS4 crop.")
-        if float(self.somatic_fragment_merge_max_depth_um) < 0:
-            errors.append("Somatic fragment merge max depth must be >= 0.")
-        if not (0 <= float(self.somatic_fragment_merge_min_soma_similarity) <= 1):
-            errors.append("Somatic fragment merge minimum soma similarity must be between 0 and 1.")
-        if not (0 <= float(self.somatic_fragment_merge_max_isi_violation_fraction) <= 1):
-            errors.append("Somatic fragment merge max ISI violation fraction must be between 0 and 1.")
-        if not (0 <= float(self.somatic_fragment_merge_max_duplicate_fraction) <= 1):
-            errors.append("Somatic fragment merge max duplicate fraction must be between 0 and 1.")
-        if not (0 <= float(self.somatic_state_group_full_template_similarity) <= 1):
-            errors.append("Somatic state full-template grouping similarity must be between 0 and 1.")
-        if float(self.somatic_refractory_ms) < 0:
-            errors.append("Somatic refractory ms must be >= 0.")
-        if not (0 <= float(self.somatic_duplicate_ms) <= 0.5):
-            errors.append("Somatic duplicate ms must be between 0 and 0.5.")
-        if not (0 <= float(self.somatic_conflict_ratio_threshold) <= 1):
-            errors.append("Somatic conflict ratio threshold must be between 0 and 1.")
-        if int(self.somatic_max_spikes_per_unit_for_conflict_metrics) < 1:
-            errors.append("Somatic max spikes per unit for conflict metrics must be at least 1.")
-        if int(self.somatic_state_channel_radius) < 0:
-            errors.append("Somatic state channel radius must be >= 0.")
+            errors.append("Custom KS4 reference duration must be >= 0 seconds.")
+
+    def _validate_state_sorter_options(self, selected_stage_keys: list[str] | None, errors: list[str]) -> None:
+        selected = set(selected_stage_keys or [])
+        if "state_sorter" not in selected:
+            return
+        if int(self.state_sorter_n_states) < 1:
+            errors.append("StateSorter states must be >= 1.")
+        if int(self.state_sorter_n_components) < 1:
+            errors.append("StateSorter SVD components must be >= 1.")
 
     def validate_for_run(self, selected_stage_keys: list[str] | None = None, *, allow_existing_output: bool = False) -> None:
         errors: list[str] = []
@@ -493,6 +496,9 @@ class PipelineConfig:
             raise PipelineConfigError("\n".join(errors))
 
         self.normalized_brain_regions()
+        probe_ids = self.normalized_probe_ids()
+        if len(set(probe_ids)) != len(probe_ids):
+            errors.append("Each selected physical probe must be unique.")
         self._validate_existing_paths(selected_stage_keys, errors)
         self._validate_raw_files(errors)
         self._validate_path_separation(errors)
@@ -500,7 +506,12 @@ class PipelineConfig:
             self._validate_output_targets(errors)
         self._validate_catgt_arguments(errors)
         self._validate_sync_crop(errors)
+        if self.minimum_switching_pulse_ms < 0:
+            errors.append("Minimum switching pulse width must be >= 0 ms.")
+        if self.minimum_rotation_pulse_ms < 0:
+            errors.append("Minimum rotation pulse width must be >= 0 ms.")
         self._validate_custom_ks4_options(selected_stage_keys, errors)
+        self._validate_state_sorter_options(selected_stage_keys, errors)
         if errors:
             raise PipelineConfigError("\n\n".join(errors))
 

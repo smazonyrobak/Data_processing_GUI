@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.agents/
+._*
+*.lnk
+*.log
+*.bak_*
+pipeline configs/pipeline_config_recording*.json
+pipeline configs/statesort_run*.json
+Kilosort_state_enhanced/

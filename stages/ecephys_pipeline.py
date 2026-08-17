@@ -97,7 +97,6 @@ def _settings_from_config(cfg: PipelineConfig) -> dict:
         "ks_doFilter": cfg.ks_doFilter,
         "c_Waves_snr_um": cfg.c_waves_snr_um,
         "c_Waves_calc_half": cfg.c_waves_calc_half,
-        "event_ex_param_str": cfg.event_ex_param_str,
         "runTPrime": cfg.run_tprime,
         "sync_period": cfg.tprime_syncperiod_s,
         "toStream_sync_params": _normalise_tprime_stream(cfg.tprime_reference_stream),
@@ -109,7 +108,6 @@ def _settings_from_config(cfg: PipelineConfig) -> dict:
         "sync_crop_ni_word": cfg.ni_word,
         "sync_crop_ni_sync_bit": cfg.sync_bit,
         "sync_crop_sync_threshold": cfg.sync_threshold,
-        "create_aux_timepoints": cfg.create_aux_timepoints,
         "modules": cfg.modules,
         "json_directory": str(cfg.json_dir),
         "noise_template_use_rf": cfg.noise_template_use_rf,
@@ -205,3 +203,26 @@ def run_ecephys_spike_sorting(cfg: PipelineConfig, logger: StageLogger) -> None:
         _collect_tprime_event_files(cfg, logger)
 
     logger.log(f"ecephys_spike_sorting_LNE pipeline finished: {cfg.catgt_root}")
+
+
+def run_catgt_only(cfg: PipelineConfig, logger: StageLogger) -> None:
+    os.environ["MPLBACKEND"] = "Agg"
+    _prepare_import_path(cfg)
+    cfg.catgt_output_dir.mkdir(parents=True, exist_ok=True)
+    cfg.json_dir.mkdir(parents=True, exist_ok=True)
+
+    settings = _settings_from_config(cfg)
+    settings["run_CatGT"] = True
+    settings["runTPrime"] = False
+    settings["modules"] = []
+    settings_path = cfg.logs_dir / "catgt_only_settings.json"
+    settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    logger.log(f"Running CatGT only with settings: {settings_path}")
+
+    module = importlib.import_module("ecephys_spike_sorting.scripts.sglx_multi_run_pipeline_mycopy")
+    buffer = _EmitBuffer(logger.output)
+    with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
+        module.run_pipeline(settings)
+    buffer.flush()
+
+    logger.log(f"CatGT only finished: {cfg.catgt_root}")

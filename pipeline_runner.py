@@ -4,17 +4,18 @@ import datetime as dt
 from pathlib import Path
 
 from pipeline_config import PipelineConfig
-from stages import (
-    build_preprocessing_output,
-    build_stimulus_metadata,
-    run_custom_ks4,
-    run_ecephys_spike_sorting,
-)
+from stages.build_preprocessing_output import build_preprocessing_output
+from stages.custom_ks4 import run_custom_ks4
+from stages.ecephys_pipeline import run_catgt_only, run_ecephys_spike_sorting
+from stages.state_sorter import run_state_sorter
+from stages.stimulus_metadata import build_stimulus_metadata
 
 
 STAGES = [
+    ("catgt", "CatGT only", run_catgt_only),
     ("ecephys_pipeline", "ecephys_spike_sorting_LNE pipeline", run_ecephys_spike_sorting),
-    ("custom_ks4", "Custom somatic KS4", run_custom_ks4),
+    ("custom_ks4", "Kilosort4S residual states", run_custom_ks4),
+    ("state_sorter", "StateSorter waveform states", run_state_sorter),
     ("stimulus_metadata", "Stimulus metadata", build_stimulus_metadata),
     ("preprocessing_output", "Build preprocessing output", build_preprocessing_output),
 ]

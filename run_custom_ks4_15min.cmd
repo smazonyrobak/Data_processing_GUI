@@ -28,8 +28,8 @@ if not exist "%CFG%" (
     exit /b 1
 )
 
-set "TMP_CFG=%TEMP%\somatic_custom_ks4_15min_pipeline_config.json"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$cfgPath = '%CFG%'; $outPath = '%TMP_CFG%'; $cfg = Get-Content -Raw -Path $cfgPath | ConvertFrom-Json; $cfg.custom_kilosort_repository = '%~dp0Kilosort_state_enhanced'; $cfg | Add-Member -NotePropertyName custom_ks4_reference_duration_s -NotePropertyValue 900 -Force; $cfg | Add-Member -NotePropertyName custom_ks4_run_quality_metrics -NotePropertyValue $true -Force; $cfg | ConvertTo-Json -Depth 100 | Set-Content -Path $outPath -Encoding UTF8"
+set "TMP_CFG=%TEMP%\state_compat_custom_ks4_15min_pipeline_config.json"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$cfgPath = '%CFG%'; $outPath = '%TMP_CFG%'; $cfg = Get-Content -Raw -Path $cfgPath | ConvertFrom-Json; $cfg.custom_kilosort_repository = '%~dp0..\Kilosort4S'; $cfg | Add-Member -NotePropertyName custom_ks4_reference_duration_s -NotePropertyValue 900 -Force; $cfg | Add-Member -NotePropertyName custom_ks4_run_quality_metrics -NotePropertyValue $true -Force; if ($cfg.ks_tmax -lt 0 -or ($cfg.ks_tmax -gt ($cfg.ks_tmin + 900))) { $cfg.ks_tmax = $cfg.ks_tmin + 900 }; $cfg | ConvertTo-Json -Depth 100 | Set-Content -Path $outPath -Encoding UTF8"
 if errorlevel 1 (
     echo Failed to write temporary patched config.
     exit /b 1
@@ -39,12 +39,12 @@ echo Using config:
 echo     "%CFG%"
 echo Temporary patched config:
 echo     "%TMP_CFG%"
-echo Running custom somatic fragment merge with custom_ks4_reference_duration_s=900
+echo Running Kilosort4S residual states with a 15 minute KS4 crop
 
 python pipeline_cli.py --config "%TMP_CFG%" --stages custom_ks4 --validated-output
 set "PIPELINE_EXIT=%ERRORLEVEL%"
 if not "%PIPELINE_EXIT%"=="0" exit /b %PIPELINE_EXIT%
 
-echo Copying custom somatic outputs into preprocessed_data\custom_ks4_somatic
+echo Copying modified KS4 outputs into preprocessed_data\custom_ks4_state_compat
 python package_custom_ks4_results.py --config "%TMP_CFG%"
 exit /b %errorlevel%
