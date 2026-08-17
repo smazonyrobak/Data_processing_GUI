@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import asdict, dataclass, field, fields as dataclass_fields
 from pathlib import Path
 from typing import Any
+
+
+APP_DIR = Path(__file__).resolve().parent
+TOOLS_DIR = APP_DIR / "tools"
 
 
 class PipelineConfigError(ValueError):
@@ -83,17 +88,17 @@ SHELL_META_CHARS = {"&", "|", ">", "<", ";"}
 
 @dataclass
 class PipelineConfig:
-    processing_python: str = r"C:\Users\slic\miniconda3\envs\npixel_analysis\python.exe"
-    spikeglx_run: str = r"G:\SpikeGLX_data_saving_dir_Marcin_Szymon\SpikeGLX_savefiles\myRun_TEST_g0"
-    stim_cam_run: str = r"G:\SpikeGLX_data_saving_dir_Marcin_Szymon\Stim_and_cam_savefiles\Run_TEST_stim_and_cam"
-    catgt_exe: str = r"C:\Users\slic\Desktop\CatGT-win\CatGT.exe"
-    tprime_exe: str = r"C:\Users\slic\Desktop\TPrime-win\TPrime.exe"
-    cwaves_path: str = r"C:\Users\slic\Desktop\C_Waves-win"
+    processing_python: str = sys.executable
+    spikeglx_run: str = ""
+    stim_cam_run: str = ""
+    catgt_exe: str = str(TOOLS_DIR / "CatGT-win" / "CatGT.exe")
+    tprime_exe: str = str(TOOLS_DIR / "TPrime-win" / "TPrime.exe")
+    cwaves_path: str = str(TOOLS_DIR / "C_Waves-win")
     preprocessed_root: str = ""
     catgt_dest: str = ""
     json_directory: str = ""
     kilosort_output_tmp: str = ""
-    ecephys_directory: str = ""
+    ecephys_directory: str = str(APP_DIR / "ecephys_spike_sorting_LNE" / "ecephys_spike_sorting")
     npy_matlab_repository: str = ""
     kilosort_repository: str = ""
     kilosort20_repository: str = ""

@@ -10,3 +10,8 @@ GitPython
 xmljson
 xarray
 h5py
+matplotlib
+scikit-learn
+joblib
+psutil
+pillow
